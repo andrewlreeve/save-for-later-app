@@ -1,21 +1,30 @@
 import React, { useEffect, useState } from 'react';
+import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
+import { Program, Provider, web3, BN } from '@project-serum/anchor';
+import idl from './idl.json';
+import kp from './keypair.json';
 import { Tweet } from 'react-twitter-widgets';
 import twitterLogo from './assets/twitter-logo.svg';
 import './App.css';
 
+const { SystemProgram } = web3;
+const arr = Object.values(kp._keypair.secretKey);
+const secret = new Uint8Array(arr);
+const baseAccount = web3.Keypair.fromSecretKey(secret);
+const programID = new PublicKey(idl.metadata.address);
+const network = clusterApiUrl('devnet');
+const opts = {
+  preflightCommitment: "processed"
+}
+
 // Constants
-const TEST_TWEETS = [
-  "1457342491477303297",
-  "1460679770396520448",
-  "1458896267719892998",
-]
 const TWITTER_HANDLE = 'andrewlreeve';
 const TWITTER_LINK = `https://twitter.com/${TWITTER_HANDLE}`;
 
 const App = () => {
   const [walletAddress, setWalletAddress] = useState(null);
   const [inputValue, setInputValue] = useState('');
-  const [tweetIds, SetTweetIds] = useState([]);
+  const [tweetIds, setTweetIds] = useState(["2343423434243"]);
   const checkIfWalletIsConnected = async () => {
     try {
       const { solana } = window;
@@ -44,18 +53,84 @@ const App = () => {
     }
   };
 
-  const sendTweetId = async () => {
-    if (inputValue.length > 0) {
-      console.log('Tweet ID: ', inputValue);
-    } else {
-      console.log('Empty input. Try again.')
-    }
-  }
-
   const onInputChange = (event) => {
     const { value } = event.target;
     setInputValue(value);
   }
+
+  const getProvider = () => {
+    const connection = new Connection(network, opts.preflightCommitment);
+    const provider = new Provider(
+      connection, window.solana, opts.preflightCommitment,
+    );
+    return provider
+  }
+
+  const createTweetAccount = async () => {
+    try {
+      const provider = getProvider();
+      const program = new Program(idl, programID, provider);
+      console.log("ping");
+      await program.rpc.startStuffOff({
+        accounts: {
+          baseAccount: baseAccount.publicKey,
+          user: provider.wallet.publicKey,
+          systemProgram: SystemProgram.programId,
+        },
+        signers: [baseAccount]
+      });
+      console.log("Created a new BaseAccount with address: ", baseAccount.publicKey.toString());
+      await getTweets();
+    } catch(error) {
+      console.log("Error creating BaseAccount account: ", error);
+    }
+  }
+
+  const convertBigNumberToString = (tweetIds) => {
+    return tweetIds.map(tweet => {
+      return tweet.tweetId.toString();
+    })
+  }
+
+  const getTweets = async() => {
+    try {
+      const provider = getProvider();
+      const program = new Program(idl, programID, provider);
+      const account = await program.account.baseAccount.fetch(baseAccount.publicKey);
+
+      console.log("Got the account", account);
+      console.log("TweetIds", convertBigNumberToString(account.tweetIds));
+      setTweetIds(convertBigNumberToString(account.tweetIds))
+    } catch (error) {
+      console.log("Error in getTweets: ", error);
+      setTweetIds(null); 
+    }
+  }
+
+  const sendTweetId = async () => {
+    if (inputValue.length === 0) {
+      console.log("No Tweet ID given!");
+      return
+    }
+
+    console.log("Tweet ID: ", inputValue);
+    try {
+      const provider = getProvider();
+      const program = new Program(idl, programID, provider);
+
+      await program.rpc.addTweetId(new BN(inputValue.toString()), {
+        accounts: {
+          baseAccount: baseAccount.publicKey,
+          user: provider.wallet.publicKey,
+        },
+      })
+      console.log("Tweet ID successfully sent to program ", inputValue);
+
+      await getTweets();
+    } catch(error) {
+      console.log("Error sending Tweet:", error);
+    }
+  };
 
   const renderNotConnectedContainer = () => (
     <button
@@ -66,30 +141,44 @@ const App = () => {
     </button>
   );
 
-  const renderConnectedContainer = () => (
-    <div className="connected-container">
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          sendTweetId();
-        }}
-      >
-        <input type="text"
-        placeholder="Enter Tweet ID"
-        value={inputValue}
-        onChange={onInputChange}
-        />
-        <button type="submit" className="cta-button submit-tweet-button">Submit</button>
-      </form>
-      <div className="tweet-grid">
-        {tweetIds.map(tweetId => (
-          <div className="tweet-item" key={tweetId}>
-           <Tweet tweetId={tweetId} options={{ theme: "dark", width: '400px'}}/>
+  const renderConnectedContainer = () => {
+    if (tweetIds === null) {
+      return (
+        <div className="connected-container">
+          <button className="cta-button submit-tweet-button" onClick={createTweetAccount}>
+            Do One-Time Initialization For Tweet Program Account
+          </button>
+        </div>
+      )
+    } else { 
+      return (
+        <div className="connected-container">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              sendTweetId();
+            }}
+          >
+            <input type="text"
+            placeholder="Enter Tweet ID"
+            value={inputValue}
+            onChange={onInputChange}
+            />
+            <button type="submit" className="cta-button submit-tweet-button">Submit</button>
+          </form>
+          <div className="tweet-grid">
+            {tweetIds.map((item, index) => (
+              <div className="tweet-item" key={index}>
+                <Tweet tweetId={item} options={{ theme: "dark", width: '400px'}}/>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-    </div>
-  )
+        </div>
+      )
+    }
+  }
+
+
 
   useEffect(() => {
     const onLoad = async () => {
@@ -102,8 +191,7 @@ const App = () => {
   useEffect(() => {
     if (walletAddress) {
       console.log('Fetching Tweet IDs...')
-      // [TODO] call Solana Program
-      SetTweetIds(TEST_TWEETS);
+      getTweets();
     }
   }, [walletAddress]);
 
